@@ -63,6 +63,25 @@ def _scan_secrets(value: Any, path: str = "$") -> None:
             raise DeltaValidationError(f"token-like material forbidden at {path}")
 
 
+def _scan_authority_overrides(value: Any, path: str = "$") -> None:
+    forbidden = {
+        "actor",
+        "writeauthority",
+        "authority",
+        "policyauthority",
+    }
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _normalized_key(key) in forbidden:
+                raise DeltaValidationError(
+                    f"caller-supplied authority field forbidden at {path}.{key}"
+                )
+            _scan_authority_overrides(child, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, child in enumerate(value):
+            _scan_authority_overrides(child, f"{path}[{index}]")
+
+
 def _object_no_duplicates(pairs):
     result = {}
     for key, value in pairs:
@@ -70,6 +89,10 @@ def _object_no_duplicates(pairs):
             raise DeltaValidationError(f"duplicate JSON key: {key}")
         result[key] = value
     return result
+
+
+def _reject_json_constant(value: str):
+    raise DeltaValidationError(f"non-finite JSON number forbidden: {value}")
 
 
 def validate_delta_bytes(raw: bytes) -> ValidatedDelta:
@@ -80,21 +103,39 @@ def validate_delta_bytes(raw: bytes) -> ValidatedDelta:
 
     try:
         text = bytes(raw).decode("utf-8")
-        value = json.loads(text, object_pairs_hook=_object_no_duplicates)
-    except Exception as exc:
+        value = json.loads(
+            text,
+            object_pairs_hook=_object_no_duplicates,
+            parse_constant=_reject_json_constant,
+        )
+    except DeltaValidationError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise DeltaValidationError("invalid UTF-8 JSON") from exc
 
     if not isinstance(value, dict):
         raise DeltaValidationError("delta root must be an object")
 
-    expected = {"protocol_version", "delta_id", "created_at_utc", "domain", "project_scope", "candidates"}
+    expected = {
+        "protocol_version",
+        "delta_id",
+        "created_at_utc",
+        "domain",
+        "project_scope",
+        "candidates",
+    }
     if set(value) != expected:
         raise DeltaValidationError("delta root fields are not exact")
     if value["protocol_version"] != PROTOCOL:
         raise DeltaValidationError("invalid protocol_version")
-    if not re.fullmatch(r"delta_[0-9a-f]{32}", value["delta_id"]):
+    if not isinstance(value["delta_id"], str) or not re.fullmatch(
+        r"delta_[0-9a-f]{32}", value["delta_id"]
+    ):
         raise DeltaValidationError("invalid delta_id")
-    parse_utc(value["created_at_utc"])
+    try:
+        parse_utc(value["created_at_utc"])
+    except (TypeError, ValueError) as exc:
+        raise DeltaValidationError("invalid created_at_utc") from exc
     if not isinstance(value["domain"], str) or not value["domain"].strip():
         raise DeltaValidationError("domain must be non-empty")
     if not isinstance(value["project_scope"], str) or not value["project_scope"].strip():
@@ -106,35 +147,36 @@ def validate_delta_bytes(raw: bytes) -> ValidatedDelta:
 
     seen: set[str] = set()
     for candidate in candidates:
-        if not isinstance(candidate, dict) or set(candidate) != {"candidate_id", "action", "request"}:
+        if not isinstance(candidate, dict) or set(candidate) != {
+            "candidate_id",
+            "action",
+            "request",
+        }:
             raise DeltaValidationError("candidate fields are not exact")
-        if not re.fullmatch(r"cand_[0-9a-f]{32}", candidate["candidate_id"]):
+        if not isinstance(candidate["candidate_id"], str) or not re.fullmatch(
+            r"cand_[0-9a-f]{32}", candidate["candidate_id"]
+        ):
             raise DeltaValidationError("invalid candidate_id")
         if candidate["candidate_id"] in seen:
             raise DeltaValidationError("duplicate candidate_id")
         seen.add(candidate["candidate_id"])
-        if candidate["action"] not in ACTIONS:
+        if not isinstance(candidate["action"], str) or candidate["action"] not in ACTIONS:
             raise DeltaValidationError("invalid action")
         if not isinstance(candidate["request"], dict):
             raise DeltaValidationError("request must be an object")
 
         request = candidate["request"]
-        if "domain" in request and request["domain"] != value["domain"]:
+        if request.get("domain") != value["domain"]:
             raise DeltaValidationError("cross-domain candidate forbidden")
-        if "project_scope" in request and request["project_scope"] != value["project_scope"]:
+        if request.get("project_scope") != value["project_scope"]:
             raise DeltaValidationError("cross-project candidate forbidden")
-        forbidden_authority = {
-            "actor",
-            "write_authority",
-            "authority",
-            "policy_authority",
-        }
-        if forbidden_authority.intersection(request):
-            raise DeltaValidationError("caller-supplied authority fields forbidden")
 
-    _scan_secrets(value)
-
-    payload = canonical_bytes(value)
+    try:
+        _scan_secrets(value)
+        _scan_authority_overrides(value)
+        payload = canonical_bytes(value)
+    except RecursionError as exc:
+        raise DeltaValidationError("delta nesting is too deep") from exc
     return ValidatedDelta(
         value=value,
         canonical_bytes=payload,

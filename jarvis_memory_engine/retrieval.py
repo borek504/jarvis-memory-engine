@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Any, Iterable
 
+from .canonical import digest_json
 from .model import freshness_state
 
 
@@ -46,9 +48,12 @@ def search(
     allow_sensitive: bool = False,
     sensitive_purpose: str | None = None,
     limit: int = 50,
+    now: datetime | None = None,
 ) -> list[dict[str, Any]]:
     if not 1 <= limit <= 500:
         raise ValueError("limit must be between 1 and 500")
+    if query is not None and not isinstance(query, str):
+        raise TypeError("query must be a string or None")
     if allow_sensitive and (
         not isinstance(sensitive_purpose, str) or not sensitive_purpose.strip()
     ):
@@ -78,6 +83,7 @@ def search(
             aged_after_utc=record["aged_after_utc"],
             stale_after_utc=record["stale_after_utc"],
             validated_at_utc=record["validated_at_utc"],
+            now=now,
         )
         if usable_only and state in {"STALE", "UNKNOWN", "NOT_APPLICABLE"}:
             continue
@@ -122,15 +128,19 @@ def build_context(
     query: str | None = None,
     max_records: int = 100,
     max_utf8_bytes: int = 256_000,
+    now: datetime | None = None,
     **filters: Any,
 ) -> dict[str, Any]:
-    if max_records < 0 or max_utf8_bytes < 0:
+    if not 0 <= max_records <= 500:
+        raise ValueError("max_records must be between 0 and 500")
+    if max_utf8_bytes < 0:
         raise ValueError("budgets must be non-negative")
 
     matches = search(
         records,
         query=query,
         limit=max(1, min(500, max_records or 1)),
+        now=now,
         **filters,
     )
     selected: list[dict[str, Any]] = []
@@ -147,7 +157,7 @@ def build_context(
         selected.append(record)
         used += len(payload)
 
-    return {
+    context = {
         "context_protocol": "jarvis-memory-context-v1",
         "items": selected,
         "budget": {
@@ -158,3 +168,4 @@ def build_context(
         },
         "untrusted_data": True,
     }
+    return {**context, "revision": digest_json(context)}

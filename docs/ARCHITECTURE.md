@@ -6,7 +6,7 @@ The Memory engine is built around a local SQLite source of truth with determinis
 
 - **Local-first canonical state** — the database is authoritative; transports are caches or delivery mechanisms, not a second source of truth.
 - **Immutable versions** — corrections create a new version instead of silently rewriting history.
-- **Explicit lifecycle** — CURRENT, SUPERSEDED, RETRACTED, and PURGED are distinct states.
+- **Explicit lifecycle** — CURRENT, SUPERSEDED, and RETRACTED are public API transitions. PURGED is reserved for separately verified maintenance/erasure workflows.
 - **Freshness-aware retrieval** — durable, time-bound, source-bound, and historical information are treated differently.
 - **Human-governed writes** — automated workflows may propose or apply policy-authorized deltas, but ambiguity and conflicts must fail closed or require review.
 - **Deterministic context** — canonical JSON and stable ordering make revisions reproducible.

@@ -5,7 +5,7 @@ A local-first, privacy-conscious memory engine for AI agents.
 The public project focuses on a small set of durable primitives:
 
 - immutable, versioned memory records;
-- explicit `CURRENT`, `SUPERSEDED`, `RETRACTED`, and `PURGED` lifecycle semantics;
+- explicit `CURRENT`, `SUPERSEDED`, and `RETRACTED` lifecycle transitions;
 - compare-and-swap style corrections;
 - idempotent writes;
 - deterministic canonical JSON and SHA-256 digests;
@@ -65,6 +65,8 @@ A stable authority slot is identified by:
 
 Corrections create a new immutable record and atomically move the head. Retractions remove the current head without silently falling back to an older version.
 
+`PURGED` is reserved for separately verified maintenance/erasure workflows. The compact v0.1 public API does not claim physical erasure; deleting SQLite bytes safely requires deployment-specific backup and storage handling.
+
 Freshness classes:
 
 - `DURABLE`
@@ -86,7 +88,7 @@ Context retrieval excludes restricted-local data and excludes sensitive data unl
 
 - max 64 KiB;
 - max 32 candidates;
-- deterministic IDs;
+- strictly formatted envelope and candidate IDs;
 - one domain/project scope per delta;
 - no caller-supplied authority override;
 - rejection of secret-like fields and private-key material.
